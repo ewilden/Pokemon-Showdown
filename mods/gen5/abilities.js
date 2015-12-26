@@ -1,3 +1,5 @@
+'use strict';
+
 exports.BattleAbilities = {
 	"frisk": {
 		inherit: true,
@@ -14,12 +16,6 @@ exports.BattleAbilities = {
 		inherit: true,
 		onModifyMove: function () {}
 	},
-	"infiltrator": {
-		inherit: true,
-		onModifyMove: function (move) {
-			move.ignoreScreens = true;
-		}
-	},
 	"oblivious": {
 		inherit: true,
 		desc: "This Pokemon cannot be infatuated (by Attract or Cute Charm). Gaining this Ability while infatuated cures it.",
@@ -27,7 +23,7 @@ exports.BattleAbilities = {
 		onUpdate: function (pokemon) {
 			if (pokemon.volatiles['attract']) {
 				pokemon.removeVolatile('attract');
-				this.add("-message", pokemon.name + " got over its infatuation. (placeholder)");
+				this.add('-end', pokemon, 'move: Attract', '[from] ability: Oblivious');
 			}
 		},
 		onTryHit: function (pokemon, target, move) {
@@ -40,5 +36,21 @@ exports.BattleAbilities = {
 	"overcoat": {
 		inherit: true,
 		onTryHit: function () {}
+	},
+	"sapsipper": {
+		inherit: true,
+		desc: "This Pokemon is immune to Grass moves. If hit by a Grass move, its Attack is increased by one stage (once for each hit of Bullet Seed). Does not affect Aromatherapy.",
+		onAllyTryHitSide: function () {}
+	},
+	"serenegrace": {
+		inherit: true,
+		onModifyMove: function (move) {
+			if (move.secondaries && move.id !== 'secretpower') {
+				this.debug('doubling secondary chance');
+				for (var i = 0; i < move.secondaries.length; i++) {
+					move.secondaries[i].chance *= 2;
+				}
+			}
+		}
 	}
 };

@@ -11,16 +11,18 @@
  * @license MIT license
  */
 
-var simulators = {};
+'use strict';
 
-var SimulatorProcess = (function () {
+let battles = Object.create(null);
+
+let SimulatorProcess = (function () {
 	function SimulatorProcess() {
-		this.process = require('child_process').fork('battle-engine.js');
+		this.process = require('child_process').fork('battle-engine.js', {cwd: __dirname});
 		this.process.on('message', function (message) {
-			var lines = message.split('\n');
-			var sim = simulators[lines[0]];
-			if (sim) {
-				sim.receive(lines);
+			let lines = message.split('\n');
+			let battle = battles[lines[0]];
+			if (battle) {
+				battle.receive(lines);
 			}
 		});
 		this.send = this.process.send.bind(this.process);
@@ -30,7 +32,7 @@ var SimulatorProcess = (function () {
 	SimulatorProcess.processes = [];
 	SimulatorProcess.spawn = function (num) {
 		if (!num) num = Config.simulatorprocesses || 1;
-		for (var i = this.processes.length; i < num; ++i) {
+		for (let i = this.processes.length; i < num; ++i) {
 			this.processes.push(new SimulatorProcess());
 		}
 	};
@@ -42,17 +44,17 @@ var SimulatorProcess = (function () {
 		this.spawn();
 	};
 	SimulatorProcess.acquire = function () {
-		var process = this.processes[0];
-		for (var i = 1; i < this.processes.length; ++i) {
+		let process = this.processes[0];
+		for (let i = 1; i < this.processes.length; ++i) {
 			if (this.processes[i].load < process.load) {
 				process = this.processes[i];
 			}
 		}
-		++process.load;
+		process.load++;
 		return process;
 	};
 	SimulatorProcess.release = function (process) {
-		--process.load;
+		process.load--;
 		if (!process.load && !process.active) {
 			process.process.disconnect();
 		}
@@ -68,80 +70,125 @@ var SimulatorProcess = (function () {
 // Create the initial set of simulator processes.
 SimulatorProcess.spawn();
 
-var slice = Array.prototype.slice;
+let slice = Array.prototype.slice;
 
-var Simulator = (function (){
-	function Simulator(id, format, rated, room) {
-		if (simulators[id]) {
-			// ???
+class BattlePlayer {
+	constructor(user, game, slot) {
+		this.userid = user.userid;
+		this.name = user.name;
+		this.game = game;
+		user.games[this.game.id] = this.game;
+
+		this.slot = slot;
+		this.slotNum = Number(slot.charAt(1)) - 1;
+		this.active = true;
+
+		for (let i = 0; i < user.connections.length; i++) {
+			let connection = user.connections[i];
+			Sockets.subchannelMove(connection.worker, this.id, this.slotNum + 1, connection.socketid);
+		}
+	}
+	destroy() {
+		if (this.active) this.simSend('leave');
+		let user = Users(this.userid);
+		if (user) {
+			delete user.games[this.game.id];
+			for (let j = 0; j < user.connections.length; j++) {
+				let connection = user.connections[j];
+				Sockets.subchannelMove(connection.worker, this.id, '0', connection.socketid);
+			}
+		}
+		this.game[this.slot] = null;
+	}
+	updateSubchannel(user) {
+		if (!user.connections) {
+			// "user" is actually a connection
+			Sockets.subchannelMove(user.worker, this.id, this.slotNum + 1, user.socketid);
 			return;
 		}
-
-		this.id = id;
-		this.room = room;
-		this.format = toId(format);
-		this.players = [null, null];
-		this.playerids = [null, null];
-		this.playerTable = {};
-		this.requests = {};
-
-		this.process = SimulatorProcess.acquire();
-
-		simulators[id] = this;
-
-		this.send('init', this.format, rated ? '1' : '');
+		for (let i = 0; i < user.connections.length; i++) {
+			let connection = user.connections[i];
+			Sockets.subchannelMove(connection.worker, this.id, this.slotNum + 1, connection.socketid);
+		}
 	}
 
-	Simulator.prototype.id = '';
+	toString() {
+		return this.userid;
+	}
+	send(data) {
+		let user = Users(this.userid);
+		if (user) user.send(data);
+	}
+	sendRoom(data) {
+		let user = Users(this.userid);
+		if (user) user.sendTo(this.game.id, data);
+	}
+	simSend(action) {
+		this.game.send.apply(this.game, [action, this.slot].concat(slice.call(arguments, 1)));
+	}
+}
 
-	Simulator.prototype.started = false;
-	Simulator.prototype.ended = false;
-	Simulator.prototype.active = true;
-	Simulator.prototype.players = null;
-	Simulator.prototype.playerids = null;
-	Simulator.prototype.playerTable = null;
-	Simulator.prototype.format = null;
-	Simulator.prototype.room = null;
-
-	Simulator.prototype.requests = null;
-
-	// log information
-	Simulator.prototype.logData = null;
-	Simulator.prototype.endType = 'normal';
-
-	Simulator.prototype.getFormat = function () {
-		return Tools.getFormat(this.format);
-	};
-	Simulator.prototype.lastIp = null;
-	Simulator.prototype.send = function () {
-		this.activeIp = ResourceMonitor.activeIp;
-		this.process.send('' + this.id + '|' + slice.call(arguments).join('|'));
-	};
-	Simulator.prototype.sendFor = function (user, action) {
-		var player = this.playerTable[toId(user)];
-		if (!player) {
-			console.log('SENDFOR FAILED: Player doesn\'t exist: ' + user.name);
-			return;
+class Battle {
+	constructor(room, format, rated) {
+		if (battles[room.id]) {
+			throw new Error("Battle with ID " + room.id + " already exists.");
 		}
 
-		this.send.apply(this, [action, player].concat(slice.call(arguments, 2)));
-	};
-	Simulator.prototype.sendForOther = function (user, action) {
-		var opposite = {'p1':'p2', 'p2':'p1'};
-		var player = this.playerTable[toId(user)];
+		this.id = room.id;
+		this.room = room;
+		this.title = "Battle";
+		this.allowRenames = !rated;
+
+		this.format = toId(format);
+		this.rated = rated;
+		this.started = false;
+		this.ended = false;
+		this.active = false;
+
+		this.players = Object.create(null);
+		this.playerCount = 0;
+		this.playerCap = 2;
+		this.p1 = null;
+		this.p2 = null;
+
+		this.playerNames = [room.p1.name, room.p2.name];
+		this.requests = {};
+
+		// log information
+		this.logData = null;
+		this.endType = 'normal';
+
+		this.rqid = '';
+		this.inactiveQueued = false;
+
+		this.process = SimulatorProcess.acquire();
+		this.send('init', this.format, rated ? '1' : '');
+
+		battles[room.id] = this;
+	}
+
+	send() {
+		this.activeIp = Monitor.activeIp;
+		this.process.send('' + this.id + '|' + slice.call(arguments).join('|'));
+	}
+	sendFor(user, action) {
+		let player = this.players[user];
 		if (!player) return;
 
-		this.send.apply(this, [action, opposite[player]].concat(slice.call(arguments, 2)));
-	};
+		this.send.apply(this, [action, player.slot].concat(slice.call(arguments, 2)));
+	}
+	checkActive() {
+		if (this.ended || !this.started) return false;
+		if (!this.p1 || !this.p1.active) return false;
+		if (!this.p2 || !this.p2.active) return false;
+		return true;
+	}
 
-	Simulator.prototype.rqid = '';
-	Simulator.prototype.inactiveQueued = false;
-	Simulator.prototype.receive = function (lines) {
-		var player;
-		ResourceMonitor.activeIp = this.activeIp;
+	receive(lines) {
+		Monitor.activeIp = this.activeIp;
 		switch (lines[1]) {
 		case 'update':
-			this.active = !this.ended && this.p1 && this.p2;
+			this.active = this.checkActive();
 			this.room.push(lines.slice(2));
 			this.room.update();
 			if (this.inactiveQueued) {
@@ -151,33 +198,37 @@ var Simulator = (function (){
 			break;
 
 		case 'winupdate':
-			this.started = true;
-			this.ended = true;
-			this.active = false;
 			this.room.push(lines.slice(3));
-			this.room.win(lines[2]);
+			this.started = true;
+			this.active = false;
 			this.inactiveSide = -1;
-			break;
-
-		case 'callback':
-			player = this.getPlayer(lines[2]);
-			if (player) {
-				player.sendTo(this.id, '|callback|' + lines[3]);
+			if (!this.ended) {
+				this.ended = true;
+				this.room.win(lines[2]);
 			}
 			break;
 
-		case 'request':
-			player = this.getPlayer(lines[2]);
-			var rqid = lines[3];
+		case 'sideupdate': {
+			let player = this[lines[2]];
 			if (player) {
-				this.requests[player.userid] = lines[4];
-				player.sendTo(this.id, '|request|' + lines[4]);
+				player.sendRoom(lines[3]);
+			}
+			break;
+		}
+
+		case 'request': {
+			let player = this[lines[2]];
+			let rqid = lines[3];
+			if (player) {
+				this.requests[player.slot] = lines[4];
+				player.sendRoom('|request|' + lines[4]);
 			}
 			if (rqid !== this.rqid) {
 				this.rqid = rqid;
 				this.inactiveQueued = true;
 			}
 			break;
+		}
 
 		case 'log':
 			this.logData = JSON.parse(lines[2]);
@@ -191,145 +242,131 @@ var Simulator = (function (){
 			this.score = [parseInt(lines[2], 10), parseInt(lines[3], 10)];
 			break;
 		}
-		ResourceMonitor.activeIp = null;
-	};
+		Monitor.activeIp = null;
+	}
 
-	Simulator.prototype.resendRequest = function (user) {
-		if (this.requests[user.userid]) {
-			user.sendTo(this.id, '|request|' + this.requests[user.userid]);
+	onConnect(user, connection) {
+		// this handles joining a battle in which a user is a participant,
+		// where the user has already identified before attempting to join
+		// the battle
+		let player = this.players[user];
+		if (!player) return;
+		player.updateSubchannel(connection || user);
+		let request = this.requests[player.slot];
+		if (request) {
+			(connection || user).sendTo(this.id, '|request|' + request);
 		}
-	};
-	Simulator.prototype.win = function (user) {
+	}
+	onUpdateConnection(user, connection) {
+		this.onConnect(user, connection);
+	}
+	onRename(user, oldid) {
+		if (user.userid === oldid) return;
+		let player = this.players[oldid];
+		if (player) {
+			if (!this.allowRenames && user.userid !== oldid) {
+				this.room.forfeit(user, " forfeited by changing their name.");
+				return;
+			}
+			if (!this.players[user]) {
+				this.players[user] = player;
+				player.userid = user.userid;
+				player.name = user.name;
+				delete this.players[oldid];
+				player.simSend('rename', user.name, user.avatar);
+			}
+		}
+		if (!player && user in this.players) {
+			// this handles a user renaming themselves into a user in the
+			// battle (e.g. by using /nick)
+			this.onConnect(user);
+		}
+	}
+	onJoin(user) {
+		let player = this.players[user];
+		if (player && !player.active) {
+			player.active = true;
+			player.simSend('join', user.name, user.avatar);
+		}
+	}
+	onLeave(user) {
+		let player = this.players[user];
+		if (player && player.active) {
+			player.active = false;
+			player.simSend('leave');
+		}
+	}
+
+	win(user) {
 		if (!user) {
 			this.tie();
-			return;
+			return true;
 		}
-		this.sendFor(user, 'win');
-	};
-	Simulator.prototype.lose = function (user) {
-		this.sendForOther(user, 'win');
-	};
-	Simulator.prototype.tie = function () {
+		let player = this.players[user];
+		if (!player) return false;
+		player.simSend('win');
+	}
+	tie() {
 		this.send('tie');
-	};
-	Simulator.prototype.chat = function (user, message) {
-		this.send('chat', user.name + "\n" + message);
-	};
+	}
 
-	Simulator.prototype.isEmpty = function () {
-		if (this.p1) return false;
-		if (this.p2) return false;
+	addPlayer(user) {
+		if (user.userid in this.players) return false;
+		if (this.playerCount >= this.playerCap) return false;
+		let player = this.makePlayer.apply(this, arguments);
+		if (!player) return false;
+		this.players[user.userid] = player;
+		this.playerCount++;
 		return true;
-	};
+	}
 
-	Simulator.prototype.isFull = function () {
-		if (this.p1 && this.p2) return true;
-		return false;
-	};
-
-	Simulator.prototype.setPlayer = function (user, slot) {
-		if (this.players[slot]) {
-			delete this.players[slot].battles[this.id];
-		}
-		if (user) {
-			user.battles[this.id] = true;
-		}
-		this.players[slot] = (user || null);
-		var oldplayerid = this.playerids[slot];
-		if (oldplayerid) {
-			if (user) {
-				this.requests[user.userid] = this.requests[oldplayerid];
-			}
-			delete this.requests[oldplayerid];
-		}
-		this.playerids[slot] = (user ? user.userid : null);
-		this.playerTable = {};
-		this.active = !this.ended;
-		for (var i = 0, len = this.players.length; i < len; i++) {
-			var player = this.players[i];
-			this['p' + (i + 1)] = player ? player.name :    '';
-			if (!player) {
-				this.active = false;
-				continue;
-			}
-			this.playerTable[player.userid] = 'p' + (i + 1);
-		}
-	};
-	Simulator.prototype.getPlayer = function (slot) {
-		if (typeof slot === 'string') {
-			if (slot.substr(0, 1) === 'p') {
-				slot = parseInt(slot.substr(1), 10) - 1;
-			} else {
-				slot = parseInt(slot, 10);
-			}
-		}
-		return this.players[slot];
-	};
-	Simulator.prototype.getSlot = function (player) {
-		return this.players.indexOf(player);
-	};
-
-	Simulator.prototype.join = function (user, slot, team) {
-		if (slot === undefined) {
-			slot = 0;
-			while (this.players[slot]) slot++;
-		}
+	makePlayer(user, team) {
+		let slotNum = 0;
+		while (this['p' + (slotNum + 1)]) slotNum++;
+		let slot = 'p' + (slotNum + 1);
 		// console.log('joining: ' + user.name + ' ' + slot);
-		if (this.players[slot] || slot >= this.players.length) return false;
 
-		this.setPlayer(user, slot);
+		let player = new BattlePlayer(user, this, slot);
+		this[slot] = player;
 
-		var message = '' + user.avatar;
+		let message = '' + user.avatar;
 		if (!this.started) {
 			message += "\n" + team;
 		}
+		player.simSend('join', user.name, message);
 		if (this.p1 && this.p2) this.started = true;
-		this.sendFor(user, 'join', user.name, message);
+		return player;
+	}
+
+	removePlayer(user) {
+		if (!this.allowRenames) return false;
+		if (!(user.userid in this.players)) return false;
+		this.players[user.userid].destroy();
+		delete this.players[user.userid];
+		this.playerCount--;
 		return true;
-	};
+	}
 
-	Simulator.prototype.rename = function () {
-		for (var i = 0, len = this.players.length; i < len; i++) {
-			var player = this.players[i];
-			var playerid = this.playerids[i];
-			if (!player) continue;
-			if (player.userid !== playerid) {
-				this.setPlayer(player, i);
-				this.sendFor(player, 'rename', player.name, player.avatar);
-			}
-		}
-	};
-
-	Simulator.prototype.leave = function (user) {
-		for (var i = 0, len = this.players.length; i < len; i++) {
-			var player = this.players[i];
-			if (player === user) {
-				this.sendFor(user, 'leave');
-				this.setPlayer(null, i);
-				return true;
-			}
-		}
-		return false;
-	};
-
-	Simulator.prototype.destroy = function () {
+	destroy() {
 		this.send('dealloc');
 
+		for (let i in this.players) {
+			this.players[i].destroy();
+		}
 		this.players = null;
 		this.room = null;
 		SimulatorProcess.release(this.process);
 		this.process = null;
-		delete simulators[this.id];
-	};
+		delete battles[this.id];
+	}
+}
 
-	return Simulator;
-})();
-
-exports.Simulator = Simulator;
-exports.simulators = simulators;
+exports.BattlePlayer = BattlePlayer;
+exports.Battle = Battle;
+exports.battles = battles;
 exports.SimulatorProcess = SimulatorProcess;
 
 exports.create = function (id, format, rated, room) {
-	if (simulators[id]) return simulators[id];
-	return new Simulator(id, format, rated, room);
+	if (battles[id]) return battles[id];
+	return new Battle(room, format, rated);
 };

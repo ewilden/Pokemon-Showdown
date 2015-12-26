@@ -11,59 +11,68 @@
  * @license MIT license
  */
 
-var cluster = require('cluster');
-var Config = require('./config/config');
+'use strict';
+
+const cluster = require('cluster');
+global.Config = require('./config/config');
 
 if (cluster.isMaster) {
-
 	cluster.setupMaster({
-		exec: 'sockets.js'
+		exec: require('path').resolve(__dirname, 'sockets.js')
 	});
 
-	var workers = exports.workers = {};
+	let workers = exports.workers = {};
 
-	var spawnWorker = exports.spawnWorker = function () {
-		var worker = cluster.fork({PSPORT: Config.port});
-		var id = worker.id;
+	let spawnWorker = exports.spawnWorker = function () {
+		let worker = cluster.fork({PSPORT: Config.port, PSBINDADDR: Config.bindaddress || '', PSNOSSL: Config.ssl ? 0 : 1});
+		let id = worker.id;
 		workers[id] = worker;
 		worker.on('message', function (data) {
 			// console.log('master received: ' + data);
 			switch (data.charAt(0)) {
-			case '*': // *socketid, ip
+			case '*': {
+				// *socketid, ip
 				// connect
-				var nlPos = data.indexOf('\n');
+				let nlPos = data.indexOf('\n');
 				Users.socketConnect(worker, id, data.substr(1, nlPos - 1), data.substr(nlPos + 1));
 				break;
+			}
 
-			case '!': // !socketid
+			case '!': {
+				// !socketid
 				// disconnect
 				Users.socketDisconnect(worker, id, data.substr(1));
 				break;
+			}
 
-			case '<': // <socketid, message
+			case '<': {
+				// <socketid, message
 				// message
-				var nlPos = data.indexOf('\n');
+				let nlPos = data.indexOf('\n');
 				Users.socketReceive(worker, id, data.substr(1, nlPos - 1), data.substr(nlPos + 1));
 				break;
+			}
+
+			default:
+			// unhandled
 			}
 		});
 	};
 
-	var workerCount = Config.workers || 1;
-	for (var i = 0; i < workerCount; i++) {
+	let workerCount = typeof Config.workers !== 'undefined' ? Config.workers : 1;
+	for (let i = 0; i < workerCount; i++) {
 		spawnWorker();
 	}
 
-	var killWorker = exports.killWorker = function (worker) {
-		var idd = worker.id + '-';
-		var count = 0;
-		for (var connectionid in Users.connections) {
+	exports.killWorker = function (worker) {
+		let idd = worker.id + '-';
+		let count = 0;
+		Users.connections.forEach(function (connection, connectionid) {
 			if (connectionid.substr(idd.length) === idd) {
-				var connection = Users.connections[connectionid];
 				Users.socketDisconnect(worker, worker.id, connection.socketid);
 				count++;
 			}
-		}
+		});
 		try {
 			worker.kill();
 		} catch (e) {}
@@ -71,12 +80,12 @@ if (cluster.isMaster) {
 		return count;
 	};
 
-	var killPid = exports.killPid = function (pid) {
+	exports.killPid = function (pid) {
 		pid = '' + pid;
-		for (var id in workers) {
-			var worker = workers[id];
+		for (let id in workers) {
+			let worker = workers[id];
 			if (pid === '' + worker.process.pid) {
-				return killWorker(worker);
+				return this.killWorker(worker);
 			}
 		}
 		return false;
@@ -90,7 +99,7 @@ if (cluster.isMaster) {
 	};
 
 	exports.channelBroadcast = function (channelid, message) {
-		for (var workerid in workers) {
+		for (let workerid in workers) {
 			workers[workerid].send('#' + channelid + '\n' + message);
 		}
 	};
@@ -104,10 +113,20 @@ if (cluster.isMaster) {
 		worker.send('-' + channelid + '\n' + socketid);
 	};
 
+	exports.subchannelBroadcast = function (channelid, message) {
+		for (let workerid in workers) {
+			workers[workerid].send(':' + channelid + '\n' + message);
+		}
+	};
+	exports.subchannelMove = function (worker, channelid, subchannelid, socketid) {
+		worker.send('.' + channelid + '\n' + subchannelid + '\n' + socketid);
+	};
 } else {
 	// is worker
 
 	if (process.env.PSPORT) Config.port = +process.env.PSPORT;
+	if (process.env.PSBINDADDR) Config.bindaddress = process.env.PSBINDADDR;
+	if (+process.env.PSNOSSL) Config.ssl = null;
 
 	// ofe is optional
 	// if installed, it will heap dump if the process runs out of memory
@@ -122,34 +141,35 @@ if (cluster.isMaster) {
 
 	// It's optional if you don't need these features.
 
-	var Cidr = require('./cidr');
+	global.Cidr = require('./cidr');
 
 	if (Config.crashguard) {
 		// graceful crash
 		process.on('uncaughtException', function (err) {
-			require('./crashlogger.js')(err, 'Socket process ' + cluster.worker.id + ' (' + process.pid + ')');
+			require('./crashlogger.js')(err, 'Socket process ' + cluster.worker.id + ' (' + process.pid + ')', true);
 		});
 	}
 
-	var app = require('http').createServer();
-	var appssl;
+	let app = require('http').createServer();
+	let appssl;
 	if (Config.ssl) {
 		appssl = require('https').createServer(Config.ssl.options);
 	}
 	try {
 		(function () {
-			var nodestatic = require('node-static');
-			var cssserver = new nodestatic.Server('./config');
-			var avatarserver = new nodestatic.Server('./config/avatars');
-			var staticserver = new nodestatic.Server('./static');
-			var staticRequestHandler = function (request, response) {
+			let nodestatic = require('node-static');
+			let cssserver = new nodestatic.Server('./config');
+			let avatarserver = new nodestatic.Server('./config/avatars');
+			let staticserver = new nodestatic.Server('./static');
+			let staticRequestHandler = function (request, response) {
+				// console.log("static rq: " + request.socket.remoteAddress + ":" + request.socket.remotePort + " -> " + request.socket.localAddress + ":" + request.socket.localPort + " - " + request.method + " " + request.url + " " + request.httpVersion + " - " + request.rawHeaders.join('|'));
 				request.resume();
 				request.addListener('end', function () {
 					if (Config.customhttpresponse &&
 							Config.customhttpresponse(request, response)) {
 						return;
 					}
-					var server;
+					let server;
 					if (request.url === '/custom.css') {
 						server = cssserver;
 					} else if (request.url.substr(0, 9) === '/avatars/') {
@@ -182,9 +202,9 @@ if (cluster.isMaster) {
 	// This is the main server that handles users connecting to our server
 	// and doing things on our server.
 
-	var sockjs = require('sockjs');
+	let sockjs = require('sockjs');
 
-	var server = sockjs.createServer({
+	let server = sockjs.createServer({
 		sockjs_url: "//play.pokemonshowdown.com/js/lib/sockjs-0.3.min.js",
 		log: function (severity, message) {
 			if (severity === 'error') console.log('ERROR: ' + message);
@@ -193,12 +213,13 @@ if (cluster.isMaster) {
 		websocket: !Config.disablewebsocket
 	});
 
-	var sockets = {};
-	var channels = {};
+	let sockets = {};
+	let channels = {};
+	let subchannels = {};
 
 	// Deal with phantom connections.
-	var sweepClosedSockets = function () {
-		for (var s in sockets) {
+	let sweepClosedSockets = function () {
+		for (let s in sockets) {
 			if (sockets[s].protocol === 'xhr-streaming' &&
 				sockets[s]._session &&
 				sockets[s]._session.recv) {
@@ -218,17 +239,19 @@ if (cluster.isMaster) {
 			}
 		}
 	};
-	var interval;
-	if (!Config.herokuhack) {
-		interval = setInterval(sweepClosedSockets, 1000 * 60 * 10);
-	}
+	let interval = setInterval(sweepClosedSockets, 1000 * 60 * 10); // eslint-disable-line no-unused-vars
 
 	process.on('message', function (data) {
 		// console.log('worker received: ' + data);
-		var socket = null;
-		var socketid = null;
-		var channelid = null;
+		let socket = null, socketid = '';
+		let channel = null, channelid = '';
+		let subchannel = null, subchannelid = '';
+
 		switch (data.charAt(0)) {
+		case '$': // $code
+			eval(data.substr(1));
+			break;
+
 		case '!': // !socketid
 			// destroy
 			socketid = data.substr(1);
@@ -243,56 +266,128 @@ if (cluster.isMaster) {
 			}
 			break;
 
-		case '>': // >socketid, message
+		case '>': {
+			// >socketid, message
 			// message
-			var nlLoc = data.indexOf('\n');
+			let nlLoc = data.indexOf('\n');
 			socket = sockets[data.substr(1, nlLoc - 1)];
 			if (!socket) return;
 			socket.write(data.substr(nlLoc + 1));
 			break;
+		}
 
-		case '#': // #channelid, message
+		case '#': {
+			// #channelid, message
 			// message to channel
-			var nlLoc = data.indexOf('\n');
+			let nlLoc = data.indexOf('\n');
 			channel = channels[data.substr(1, nlLoc - 1)];
-			var message = data.substr(nlLoc + 1);
+			let message = data.substr(nlLoc + 1);
 			for (socketid in channel) {
 				channel[socketid].write(message);
 			}
 			break;
+		}
 
-		case '+': // +channelid, socketid
+		case '+': {
+			// +channelid, socketid
 			// add to channel
-			var nlLoc = data.indexOf('\n');
+			let nlLoc = data.indexOf('\n');
 			socketid = data.substr(nlLoc + 1);
 			socket = sockets[socketid];
 			if (!socket) return;
 			channelid = data.substr(1, nlLoc - 1);
-			var channel = channels[channelid];
-			if (!channel) channel = channels[channelid] = {};
+			channel = channels[channelid];
+			if (!channel) channel = channels[channelid] = Object.create(null);
 			channel[socketid] = socket;
 			break;
+		}
 
-		case '-': // -channelid, socketid
+		case '-': {
+			// -channelid, socketid
 			// remove from channel
-			var nlLoc = data.indexOf('\n');
-			var channelid = data.substr(1, nlLoc - 1);
-			var channel = channels[channelid];
+			let nlLoc = data.indexOf('\n');
+			channelid = data.slice(1, nlLoc);
+			channel = channels[channelid];
 			if (!channel) return;
-			delete channel[data.substr(nlLoc + 1)];
-			var isEmpty = true;
-			for (var socketid in channel) {
+			socketid = data.slice(nlLoc + 1);
+			delete channel[socketid];
+			if (subchannels[channelid]) delete subchannels[channelid][socketid];
+			let isEmpty = true;
+			for (let socketid in channel) { // eslint-disable-line no-unused-vars
 				isEmpty = false;
 				break;
 			}
-			if (isEmpty) delete channels[channelid];
+			if (isEmpty) {
+				delete channels[channelid];
+				delete subchannels[channelid];
+			}
 			break;
+		}
+
+		case '.': {
+			// .channelid, subchannelid, socketid
+			// move subchannel
+			let nlLoc = data.indexOf('\n');
+			channelid = data.slice(1, nlLoc);
+			let nlLoc2 = data.indexOf('\n', nlLoc + 1);
+			subchannelid = data.slice(nlLoc + 1, nlLoc2);
+			socketid = data.slice(nlLoc2 + 1);
+
+			subchannel = subchannels[channelid];
+			if (!subchannel) subchannel = subchannels[channelid] = Object.create(null);
+			if (subchannelid === '0') {
+				delete subchannel[socketid];
+			} else {
+				subchannel[socketid] = subchannelid;
+			}
+			break;
+		}
+
+		case ':': {
+			// :channelid, message
+			// message to subchannel
+			let nlLoc = data.indexOf('\n');
+			channelid = data.slice(1, nlLoc);
+			channel = channels[channelid];
+			subchannel = subchannels[channelid];
+			let message = data.substr(nlLoc + 1);
+			let messages = [null, null, null];
+			for (socketid in channel) {
+				switch (subchannel ? subchannel[socketid] : '0') {
+				case '1':
+					if (!messages[1]) {
+						messages[1] = message.replace(/\n\|split\n[^\n]*\n([^\n]*)\n[^\n]*\n[^\n]*/g, '\n$1');
+					}
+					channel[socketid].write(messages[1]);
+					break;
+				case '2':
+					if (!messages[2]) {
+						messages[2] = message.replace(/\n\|split\n[^\n]*\n[^\n]*\n([^\n]*)\n[^\n]*/g, '\n$1');
+					}
+					channel[socketid].write(messages[2]);
+					break;
+				default:
+					if (!messages[0]) {
+						messages[0] = message.replace(/\n\|split\n([^\n]*)\n[^\n]*\n[^\n]*\n[^\n]*/g, '\n$1');
+					}
+					channel[socketid].write(messages[0]);
+					break;
+				}
+			}
+			break;
+		}
+
+		default:
 		}
 	});
 
+	process.on('disconnect', function () {
+		process.exit();
+	});
+
 	// this is global so it can be hotpatched if necessary
-	var isTrustedProxyIp = Cidr.checker(Config.proxyip);
-	var socketCounter = 0;
+	let isTrustedProxyIp = Cidr.checker(Config.proxyip);
+	let socketCounter = 0;
 	server.on('connection', function (socket) {
 		if (!socket) {
 			// For reasons that are not entirely clear, SockJS sometimes triggers
@@ -305,14 +400,14 @@ if (cluster.isMaster) {
 			} catch (e) {}
 			return;
 		}
-		var socketid = socket.id = (++socketCounter);
+		let socketid = socket.id = (++socketCounter);
 
 		sockets[socket.id] = socket;
 
 		if (isTrustedProxyIp(socket.remoteAddress)) {
-			var ips = (socket.headers['x-forwarded-for'] || '').split(',');
-			var ip;
-			while (ip = ips.pop()) {
+			let ips = (socket.headers['x-forwarded-for'] || '').split(',');
+			let ip;
+			while ((ip = ips.pop())) {
 				ip = ip.trim();
 				if (!isTrustedProxyIp(ip)) {
 					socket.remoteAddress = ip;
@@ -323,50 +418,38 @@ if (cluster.isMaster) {
 
 		process.send('*' + socketid + '\n' + socket.remoteAddress);
 
-		// console.log('CONNECT: ' + socket.remoteAddress + ' [' + socket.id + ']');
-		var interval;
-		if (Config.herokuhack) {
-			// see https://github.com/sockjs/sockjs-node/issues/57#issuecomment-5242187
-			interval = setInterval(function () {
-				try {
-					socket._session.recv.didClose();
-				} catch (e) {}
-			}, 15000);
-		}
-
 		socket.on('data', function (message) {
 			// drop empty messages (DDoS?)
 			if (!message) return;
-			// drop blank messages (DDoS?)
-			var pipeIndex = message.indexOf('|');
-			if (pipeIndex < 0 || pipeIndex === message.length - 1) return;
 			// drop legacy JSON messages
-			if (message.charAt(0) === '{') return;
+			if (typeof message !== 'string' || message.charAt(0) === '{') return;
+			// drop blank messages (DDoS?)
+			let pipeIndex = message.indexOf('|');
+			if (pipeIndex < 0 || pipeIndex === message.length - 1) return;
+
 			process.send('<' + socketid + '\n' + message);
 		});
 
 		socket.on('close', function () {
-			if (interval) {
-				clearInterval(interval);
-			}
 			process.send('!' + socketid);
-
 			delete sockets[socketid];
-			for (var channelid in channels) {
+			for (let channelid in channels) {
 				delete channels[channelid][socketid];
 			}
 		});
 	});
 	server.installHandlers(app, {});
-	app.listen(Config.port);
-	console.log('Worker ' + cluster.worker.id + ' now listening on port ' + Config.port);
+	if (!Config.bindaddress) Config.bindaddress = '0.0.0.0';
+	app.listen(Config.port, Config.bindaddress);
+	console.log('Worker ' + cluster.worker.id + ' now listening on ' + Config.bindaddress + ':' + Config.port);
 
 	if (appssl) {
 		server.installHandlers(appssl, {});
-		appssl.listen(Config.ssl.port);
+		appssl.listen(Config.ssl.port, Config.bindaddress);
 		console.log('Worker ' + cluster.worker.id + ' now listening for SSL on port ' + Config.ssl.port);
 	}
 
-	console.log('Test your server at http://localhost:' + Config.port);
+	console.log('Test your server at http://' + (Config.bindaddress === '0.0.0.0' ? 'localhost' : Config.bindaddress) + ':' + Config.port);
 
+	require('./repl.js').start('sockets-', cluster.worker.id + '-' + process.pid, function (cmd) { return eval(cmd); });
 }

@@ -1,14 +1,19 @@
+'use strict';
+
 exports.BattleFormatsData = {
+	aegislash: {
+		inherit: true,
+		tier: 'OU'
+	},
 	blaziken: {
 		inherit: true,
 		tier: 'OU'
 	},
-	diancie: {
+	genesect: {
 		inherit: true,
-		isUnreleased: false,
 		tier: 'OU'
 	},
-	genesect: {
+	landorus: {
 		inherit: true,
 		tier: 'OU'
 	},
@@ -17,6 +22,10 @@ exports.BattleFormatsData = {
 		tier: 'Uber'
 	},
 	deoxysspeed: {
+		inherit: true,
+		tier: 'Uber'
+	},
+	hoopaunbound: {
 		inherit: true,
 		tier: 'Uber'
 	},

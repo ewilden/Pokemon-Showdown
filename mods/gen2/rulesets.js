@@ -1,9 +1,11 @@
+'use strict';
+
 exports.BattleFormats = {
 	pokemon: {
 		effectType: 'Banlist',
-		validateSet: function (set, format) {
-			var template = this.getTemplate(set.species);
-			var problems = [];
+		onValidateSet: function (set, format) {
+			let template = this.getTemplate(set.species);
+			let problems = [];
 			if (set.species === set.name) delete set.name;
 
 			if (template.gen > this.gen) {
@@ -11,23 +13,27 @@ exports.BattleFormats = {
 			} else if (template.isNonstandard) {
 				problems.push(set.species + ' is not a real Pokemon.');
 			}
-			var hasHP = false;
+			let hasHP = false;
+			let hasSD = false;
 			if (set.item) {
-				var item = this.getItem(set.item);
+				let item = this.getItem(set.item);
 				if (item.gen > this.gen) {
 					problems.push(item.name + ' does not exist in gen ' + this.gen + '.');
 				} else if (item.isNonstandard) {
 					problems.push(item.name + ' is not a real item.');
 				}
 			}
-			if (set.moves) for (var i = 0; i < set.moves.length; i++) {
-				var move = this.getMove(set.moves[i]);
-				if (move.gen > this.gen) {
-					problems.push(move.name + ' does not exist in gen ' + this.gen + '.');
-				} else if (move.isNonstandard) {
-					problems.push(move.name + ' is not a real move.');
+			if (set.moves) {
+				for (let i = 0; i < set.moves.length; i++) {
+					let move = this.getMove(set.moves[i]);
+					if (move.gen > this.gen) {
+						problems.push(move.name + ' does not exist in gen ' + this.gen + '.');
+					} else if (move.isNonstandard) {
+						problems.push(move.name + ' is not a real move.');
+					}
+					if (move.id === 'hiddenpower') hasHP = true;
+					if (move.id === 'swordsdance') hasSD = true;
 				}
-				if (move.id === 'hiddenpower') hasHP = true;
 			}
 			if (set.moves && set.moves.length > 4) {
 				problems.push((set.name || set.species) + ' has more than four moves.');
@@ -50,7 +56,7 @@ exports.BattleFormats = {
 				if (!set.ivs) {
 					set.ivs = {hp: 30, atk: 30, def: 30, spa: 30, spd: 30, spe: 30};
 				} else {
-					for (var iv in set.ivs) {
+					for (let iv in set.ivs) {
 						// Since Gen 2 has 0-15 DVs that increase 2 points, we only want pair numbers
 						if (set.ivs[iv] % 2 !== 0) set.ivs[iv]--;
 						// This shouldn't even be possible
@@ -60,6 +66,13 @@ exports.BattleFormats = {
 					set.ivs.spd = set.ivs.spa;
 				}
 				// Calculate all the IV oddness on gen 2.
+				// If you use Marowak with Thick Club, we'll be gentle enough to deal with your Attack DVs.
+				// This is only done because the gen 6 Teambuilder is confusing, using IVs and all.
+				let marowakClub = false;
+				if (toId(set.item) === 'thickclub' && set.species === 'Marowak' && hasSD) {
+					set.ivs.atk = 26;
+					marowakClub = true;
+				}
 				// Don't run shinies, they fuck your IVs
 				if (set.shiny) {
 					set.ivs.def = 20;
@@ -68,7 +81,7 @@ exports.BattleFormats = {
 					set.ivs.spd = 20;
 					// Attack can vary, so let's check it
 					if (!(set.ivs.atk in {4:1, 6:1, 12:1, 14:1, 20:1, 22:1, 28:1, 30:1})) {
-						set.ivs.atk = 30;
+						set.ivs.atk = marowakClub ? 22 : 30;
 					}
 				}
 				// Deal with female IVs.
@@ -104,16 +117,27 @@ exports.BattleFormats = {
 	},
 	standard: {
 		effectType: 'Banlist',
-		ruleset: ['Sleep Clause', 'Species Clause', 'OHKO Clause', 'Evasion Moves Clause'],
-		banlist: ['Unreleased', 'Illegal', 'Ignore Illegal Abilities'],
-		validateSet: function (set) {
+		ruleset: ['Sleep Clause Mod', 'Species Clause', 'OHKO Clause', 'Evasion Moves Clause', 'HP Percentage Mod', 'Cancel Mod'],
+		banlist: ['Unreleased', 'Illegal',
+			'Hypnosis + Perish Song + Mean Look',
+			'Hypnosis + Perish Song + Spider Web',
+			'Lovely Kiss + Perish Song + Mean Look',
+			'Lovely Kiss + Perish Song + Spider Web',
+			'Sing + Perish Song + Mean Look',
+			'Sing + Perish Song + Spider Web',
+			'Sleep Powder + Perish Song + Mean Look',
+			'Sleep Powder + Perish Song + Spider Web',
+			'Spore + Perish Song + Mean Look',
+			'Spore + Perish Song + Spider Web'
+		],
+		onValidateSet: function (set) {
 			// limit one of each move in Standard
-			var moves = [];
+			let moves = [];
 			if (set.moves) {
-				var hasMove = {};
-				for (var i = 0; i < set.moves.length; i++) {
-					var move = this.getMove(set.moves[i]);
-					var moveid = move.id;
+				let hasMove = {};
+				for (let i = 0; i < set.moves.length; i++) {
+					let move = this.getMove(set.moves[i]);
+					let moveid = move.id;
 					if (hasMove[moveid]) continue;
 					hasMove[moveid] = true;
 					moves.push(set.moves[i]);

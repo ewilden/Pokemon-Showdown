@@ -1,3 +1,5 @@
+'use strict';
+
 exports.BattleItems = {
 	aguavberry: {
 		inherit: true,
@@ -30,9 +32,9 @@ exports.BattleItems = {
 	belueberry: {
 		inherit: true,
 		naturalGift: {
-			basePower: 60,
-			type: "Ice"
-		},
+			basePower: 80,
+			type: "Electric"
+		}
 	},
 	blukberry: {
 		inherit: true,
@@ -99,7 +101,7 @@ exports.BattleItems = {
 		inherit: true,
 		naturalGift: {
 			basePower: 70,
-			type: "Water"
+			type: "Bug"
 		}
 	},
 	custapberry: {
@@ -249,7 +251,7 @@ exports.BattleItems = {
 		naturalGift: {
 			basePower: 80,
 			type: "Flying"
-		},
+		}
 	},
 	leppaberry: {
 		inherit: true,
@@ -334,7 +336,7 @@ exports.BattleItems = {
 		naturalGift: {
 			basePower: 70,
 			type: "Steel"
-		},
+		}
 	},
 	passhoberry: {
 		inherit: true,
@@ -378,13 +380,6 @@ exports.BattleItems = {
 			type: "Grass"
 		}
 	},
-	pinapberry: {
-		inherit: true,
-		naturalGift: {
-			basePower: 70,
-			type: "Ice"
-		}
-	},
 	poisongem: {
 		inherit: true,
 		isUnreleased: false,
@@ -394,7 +389,7 @@ exports.BattleItems = {
 		inherit: true,
 		naturalGift: {
 			basePower: 70,
-			type: "Poison"
+			type: "Ice"
 		}
 	},
 	psychicgem: {
@@ -403,6 +398,13 @@ exports.BattleItems = {
 		desc: "Holder's first successful Psychic-type attack will have 1.5x power. Single use."
 	},
 	qualotberry: {
+		inherit: true,
+		naturalGift: {
+			basePower: 70,
+			type: "Poison"
+		}
+	},
+	rabutaberry: {
 		inherit: true,
 		naturalGift: {
 			basePower: 70,
@@ -454,7 +456,7 @@ exports.BattleItems = {
 		naturalGift: {
 			basePower: 60,
 			type: "Ground"
-		},
+		}
 	},
 	sitrusberry: {
 		inherit: true,

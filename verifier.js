@@ -12,19 +12,20 @@
  * @license MIT license
  */
 
+'use strict';
+
 // Because I don't want two files, we're going to fork ourselves.
 
 if (!process.send) {
-
 	// This is the parent
 
-	var guid = 1;
-	var callbacks = {};
-	var callbackData = {};
+	let guid = 1;
+	let callbacks = {};
+	let callbackData = {};
 
-	var child = require('child_process').fork('verifier.js');
+	let child = require('child_process').fork('verifier.js', {cwd: __dirname});
 	exports.verify = function (data, signature, callback) {
-		var localGuid = guid++;
+		let localGuid = guid++;
 		callbacks[localGuid] = callback;
 		callbackData[localGuid] = data;
 		child.send({data: data, sig: signature, guid: localGuid});
@@ -36,21 +37,19 @@ if (!process.send) {
 			delete callbackData[response.guid];
 		}
 	});
-
 } else {
-
 	// This is the child
 
-	var Config = require('./config/config.js');
-	var crypto = require('crypto');
+	global.Config = require('./config/config.js');
+	let crypto = require('crypto');
 
-	var keyalgo = Config.loginserverkeyalgo;
-	var pkey = Config.loginserverpublickey;
+	let keyalgo = Config.loginserverkeyalgo;
+	let pkey = Config.loginserverpublickey;
 
 	process.on('message', function (message) {
-		var verifier = crypto.createVerify(keyalgo);
+		let verifier = crypto.createVerify(keyalgo);
 		verifier.update(message.data);
-		var success = false;
+		let success = false;
 		try {
 			success = verifier.verify(pkey, message.sig, 'hex');
 		} catch (e) {}
@@ -60,4 +59,9 @@ if (!process.send) {
 		});
 	});
 
+	process.on('disconnect', function () {
+		process.exit();
+	});
+
+	require('./repl.js').start('verifier', function (cmd) { return eval(cmd); });
 }
